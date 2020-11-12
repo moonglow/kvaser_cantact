@@ -167,7 +167,7 @@ static uint8_t device_data_in( USBD_HandleTypeDef *pdev, uint8_t epnum )
     return USBD_FAIL;
   
 /* use ZLP */
-#if 1
+#if 0
   PCD_HandleTypeDef *hpcd = pdev->pData;
   uint32_t len = pdev->ep_in[epnum].total_length;
   /* packet is multiple of maxpacket, so tell host what all transfer is done */
