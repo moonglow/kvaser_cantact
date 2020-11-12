@@ -56,7 +56,7 @@ xcan_device =
   },
 };
 
-static uint8_t temp_resp_buffer[256] = { 0 };
+static uint8_t temp_resp_buffer[1024] = { 0 };
 static uint8_t resp_buffer[sizeof(temp_resp_buffer)];
 static int resp_buffer_pos = 0;
 
@@ -413,6 +413,9 @@ void xcan_handle_command( filoCmd *pcmd, int size )
     case CMD_GET_CHIP_STATE_REQ:
     {
       cmdChipStateEvent *p_resp = xcan_alloc_resp( sizeof( cmdChipStateEvent ) );
+      if( !p_resp )
+        break;
+
       p_resp->cmdLen = sizeof( cmdChipStateEvent );
       p_resp->cmdNo = CMD_CHIP_STATE_EVENT;
       p_resp->transId = pcmd->getChipStateReq.transId;
