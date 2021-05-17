@@ -62,7 +62,7 @@ void xcan_can_init(void)
   g_hcan.Init.AutoWakeUp = DISABLE;
   g_hcan.Init.AutoRetransmission = ENABLE;
   g_hcan.Init.ReceiveFifoLocked = DISABLE;
-  g_hcan.Init.TransmitFifoPriority = DISABLE;
+  g_hcan.Init.TransmitFifoPriority = ENABLE;
 
   if( HAL_CAN_Init( &g_hcan ) != HAL_OK )
   {

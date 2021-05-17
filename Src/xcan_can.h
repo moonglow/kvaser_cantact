@@ -16,7 +16,7 @@ typedef struct
   uint8_t   dlc;
   uint8_t   flags;
   uint8_t   dummy;
-  uint32_t timestamp;
+  uint64_t  timestamp;
 }
 can_message_t;
 
