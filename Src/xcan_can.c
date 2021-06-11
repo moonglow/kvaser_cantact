@@ -4,7 +4,7 @@
 #include "xcan_can.h"
 #include "xcan_timestamp.h"
 
-#define CAN_TX_FIFO_SIZE (32)
+#define CAN_TX_FIFO_SIZE (64)
 static CAN_HandleTypeDef g_hcan = { .Instance = CAN };
 #define INTERNAL_CAN_IT_FLAGS          (  CAN_IT_TX_MAILBOX_EMPTY |\
                                           CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_RX_FIFO1_MSG_PENDING |\

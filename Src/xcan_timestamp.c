@@ -64,6 +64,11 @@ uint64_t xcan_timestamp_us( void )
   return ((uint64_t)tim_hi<<32u)|tim_lo;
 }
 
+uint32_t xcan_timestamp32_us( void )
+{
+  return TIM2->CNT;
+}
+
 void xcan_timestamp_ticks( uint16_t *ptime )
 {
   uint64_t ticks = xcan_timestamp_us();

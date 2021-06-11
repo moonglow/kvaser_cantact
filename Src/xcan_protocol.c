@@ -56,7 +56,7 @@ xcan_device =
   },
 };
 
-static uint8_t temp_resp_buffer[1024] = { 0 };
+static uint8_t temp_resp_buffer[732] = { 0 };
 static uint8_t resp_buffer[sizeof(temp_resp_buffer)];
 static int resp_buffer_pos = 0;
 
@@ -86,6 +86,9 @@ static void xcan_rx_message( can_message_t *pmsg )
   cmdRxCanMessage *p_resp = xcan_alloc_resp( sizeof( cmdRxCanMessage ) );
   if( !p_resp )
     return;
+  
+  /* valid CAN message, clear error flags ? */
+  xcan_device.can[0].err = 0;
 
   p_resp->cmdLen = sizeof( cmdRxCanMessage );
   p_resp->cmdNo = ( pmsg->flags & CAN_FLAG_EXTID )? CMD_RX_EXT_MESSAGE:CMD_RX_STD_MESSAGE;
@@ -137,11 +140,12 @@ static void xcan_tx_message( can_message_t *msg )
 
 static void xcan_can_error( uint8_t err, uint8_t rx_err, uint8_t tx_err )
 {
-  (void)err;
   (void)rx_err;
   (void)tx_err;
+  xcan_device.can[0].err = err;
 }
 
+#define WAIT_FOR_TXSLOTS 1
 int xcan_handle_tx_message( cmdTxCanMessage *pmsg, uint8_t ext_id )
 {
   can_message_t msg = { 0 };
@@ -173,12 +177,24 @@ int xcan_handle_tx_message( cmdTxCanMessage *pmsg, uint8_t ext_id )
   msg.dummy = pmsg->transId;
   msg.timestamp = xcan_timestamp_us();
 
+#if WAIT_FOR_TXSLOTS
+  const uint32_t ts_poll = xcan_timestamp32_us();
+  while( xcan_can_send_message( &msg ) < 0 )
+  {
+    xcan_can_poll();
+    if( xcan_device.can[0].err & CAN_ERROR_FLAG_BUSOFF )
+      return -1;
+    uint32_t ts_diff = xcan_timestamp32_us() - ts_poll;
+    if( ts_diff >= 1000000u )
+      return -1;
+  }
+#else
   if( xcan_can_send_message( &msg ) < 0 )
   {
     /* tx queue overflow ? */
     return -1;
   }
-
+#endif
   return 0;
 }
 
