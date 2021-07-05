@@ -228,9 +228,11 @@ void xcan_can_set_bus_active( uint16_t mode )
   if( mode )
   {
     HAL_CAN_Start( &g_hcan );
+    HAL_CAN_AbortTxRequest( &g_hcan, CAN_TX_MAILBOX0 | CAN_TX_MAILBOX1 | CAN_TX_MAILBOX2 );
   }
   else
   {
+    HAL_CAN_AbortTxRequest( &g_hcan, CAN_TX_MAILBOX0 | CAN_TX_MAILBOX1 | CAN_TX_MAILBOX2 );
     HAL_CAN_Stop( &g_hcan );
   }
 }
