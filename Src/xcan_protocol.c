@@ -514,6 +514,11 @@ void xcan_handle_command( filoCmd *pcmd, int size )
     }
     break;
     case CMD_SET_DRIVERMODE_REQ:
+      if( xcan_device.can[pcmd->setDrivermodeReq.channel].bus_active )
+      {
+        /* we need to stop CAN before change settings */
+        xcan_can_set_bus_active( 0 );
+      }
       switch( pcmd->setDrivermodeReq.driverMode )
       {
         case DRIVERMODE_NORMAL:
@@ -528,6 +533,11 @@ void xcan_handle_command( filoCmd *pcmd, int size )
         case DRIVERMODE_OFF:
           /* TODO: */
         break;
+      }
+      if( xcan_device.can[pcmd->setDrivermodeReq.channel].bus_active )
+      {
+        /* and we can start it again :) */
+        xcan_can_set_bus_active( 1 );
       }
       xcan_device.can[pcmd->setDrivermodeReq.channel].driver_mode = pcmd->setDrivermodeReq.driverMode;
     break;
@@ -622,13 +632,18 @@ void xcan_protocol_process_data( uint8_t *ptr, uint16_t size )
 
   for( int i = 0; i < size; )
   {
+    if( !ptr[i] )
+      break;
     pcmd = (void*)&ptr[i];
-    /* go to next aligned data */
+#if 0
+    /* next cmd aligned to 64 byte bound, we can just wait for next data chunk */
     if( pcmd->head.cmdLen == 0 )
     {
-      i = (i+63)&(~63);
-      continue;
+      //i = (i+63)&(~63);
+      //continue;
+      break;
     }
+#endif
     xcan_handle_command( pcmd, size - i );
     i += pcmd->head.cmdLen;
   }
@@ -647,9 +662,9 @@ void xcan_protocol_poll( void )
   if( resp_buffer_pos > 1 )
   {
     /* add zero cmd len as finish flag */
-    //resp_buffer[resp_buffer_pos] = 0;
-    //int res = xcan_flush_data( &resp_fsm, resp_buffer, resp_buffer_pos + 1 );
-    int res = xcan_flush_data( &resp_fsm, resp_buffer, resp_buffer_pos );
+    resp_buffer[resp_buffer_pos] = 0;
+    int res = xcan_flush_data( &resp_fsm, resp_buffer, resp_buffer_pos + 1 );
+    //int res = xcan_flush_data( &resp_fsm, resp_buffer, resp_buffer_pos );
     if( res )
     {
       resp_buffer_pos = 0;
