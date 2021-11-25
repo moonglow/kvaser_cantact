@@ -2,6 +2,7 @@
 #include "stm32f0xx_hal.h"
 #include "xcan_timestamp.h"
 #include "xcan_led.h"
+#include "boards.h"
 
 static struct
 {
@@ -12,10 +13,6 @@ static struct
   uint8_t  state;
 }
 led_mode_array[LED_TOTAL] = { 0 };
-
-#define IOPIN_LED0    GPIO_PIN_1
-#define IOPIN_LED1    GPIO_PIN_0
-#define IOPIN_PORT  GPIOB
 
 void xcan_led_init( void )
 {
