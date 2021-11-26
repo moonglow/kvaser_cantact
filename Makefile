@@ -142,11 +142,14 @@ LIBDIR =
 LDFLAGS = $(MCU) -specs=nano.specs -T$(LDSCRIPT) $(LIBDIR) $(LIBS) -Wl,-Map=$(BUILD_DIR)/$(TARGET).map,--cref -Wl,--gc-sections
 
 # default action: build all
-all: cantact entree
+all: cantact-16 cantact-8 entree
 
 # BOARD_ID should match board defined in boards.h for GPIO mapping
-cantact:
-	$(MAKE) BOARD=cantact BOARD_ID=0 EXTERNAL_CLOCK=1 CRYSTAL_FREQ_MHZ=16 DEBUG=0 OPT=-Os elf hex bin
+cantact-16:
+	$(MAKE) BOARD=cantact-16 BOARD_ID=0 EXTERNAL_CLOCK=1 CRYSTAL_FREQ_MHZ=16 DEBUG=0 OPT=-Os elf hex bin
+
+cantact-8:
+	$(MAKE) BOARD=cantact-8 BOARD_ID=0 EXTERNAL_CLOCK=1 CRYSTAL_FREQ_MHZ=8 DEBUG=0 OPT=-Os elf hex bin
 
 entree:
 	$(MAKE) BOARD=entree BOARD_ID=1 EXTERNAL_CLOCK=0 DEBUG=0 OPT=-Os elf hex bin
@@ -195,7 +198,7 @@ hex: $(HEX_TARGET)
 # clean up
 #######################################
 clean:
-	-rm -fR $(BUILD_DIR)
+	-rm -fR $(BUILD_DIR)*
   
 #######################################
 # dependencies
