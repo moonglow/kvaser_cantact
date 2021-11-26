@@ -15,7 +15,7 @@ void HAL_MspInit( void )
 }
 
 /* EXTERNAL CLOCK */
-#if 1
+#if EXTERNAL_CLOCK
 void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};

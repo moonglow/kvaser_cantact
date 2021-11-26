@@ -9,22 +9,17 @@
 ######################################
 # target
 ######################################
-CRYSTAL_FREQ_MHZ = 16
-TARGET = kvaser_cantact_hw_$(CRYSTAL_FREQ_MHZ)MHz
-
-######################################
-# building variables
-######################################
-# debug build?
-DEBUG = 0
-# optimization
-OPT = -Os
+ifeq ($(EXTERNAL_CLOCK), 1)
+	TARGET = kll_$(BOARD)_$(CRYSTAL_FREQ_MHZ)Mhz
+else
+	TARGET = kll_$(BOARD)
+endif
 
 #######################################
 # paths
 #######################################
 # Build path
-BUILD_DIR = build
+BUILD_DIR = build-$(BOARD)
 
 ######################################
 # source
@@ -102,7 +97,12 @@ C_DEFS =  \
 -DUSE_HAL_DRIVER \
 -DSTM32F042x6 \
 -DNDEBUG \
--DHSE_VALUE=$(CRYSTAL_FREQ_MHZ)000000
+-DEXTERNAL_CLOCK=$(EXTERNAL_CLOCK) \
+-DBOARD_ID=$(BOARD_ID)
+
+ifeq ($(EXTERNAL_CLOCK), 1)
+	C_DEFS += -DHSE_VALUE=$(CRYSTAL_FREQ_MHZ)000000
+endif
 
 # AS includes
 AS_INCLUDES = 
@@ -142,8 +142,14 @@ LIBDIR =
 LDFLAGS = $(MCU) -specs=nano.specs -T$(LDSCRIPT) $(LIBDIR) $(LIBS) -Wl,-Map=$(BUILD_DIR)/$(TARGET).map,--cref -Wl,--gc-sections
 
 # default action: build all
-all: $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex $(BUILD_DIR)/$(TARGET).bin
+all: cantact entree
 
+# BOARD_ID should match board defined in boards.h for GPIO mapping
+cantact:
+	$(MAKE) BOARD=cantact BOARD_ID=0 EXTERNAL_CLOCK=1 CRYSTAL_FREQ_MHZ=16 DEBUG=0 OPT=-Os elf hex bin
+
+entree:
+	$(MAKE) BOARD=entree BOARD_ID=1 EXTERNAL_CLOCK=0 DEBUG=0 OPT=-Os elf hex bin
 
 #######################################
 # build the application
@@ -154,6 +160,11 @@ vpath %.c $(sort $(dir $(C_SOURCES)))
 # list of ASM program objects
 OBJECTS += $(addprefix $(BUILD_DIR)/,$(notdir $(ASM_SOURCES:.s=.o)))
 vpath %.s $(sort $(dir $(ASM_SOURCES)))
+
+
+ELF_TARGET = $(BUILD_DIR)/$(TARGET).elf
+BIN_TARGET = $(BUILD_DIR)/$(TARGET).bin
+HEX_TARGET = $(BUILD_DIR)/$(TARGET).hex
 
 $(BUILD_DIR)/%.o: %.c Makefile | $(BUILD_DIR) 
 	$(CC) -c $(CFLAGS) -Wa,-a,-ad,-alms=$(BUILD_DIR)/$(notdir $(<:.c=.lst)) $< -o $@
@@ -173,6 +184,12 @@ $(BUILD_DIR)/%.bin: $(BUILD_DIR)/%.elf | $(BUILD_DIR)
 	
 $(BUILD_DIR):
 	mkdir $@		
+
+bin: $(BIN_TARGET)
+
+elf: $(ELF_TARGET)
+
+hex: $(HEX_TARGET)
 
 #######################################
 # clean up
