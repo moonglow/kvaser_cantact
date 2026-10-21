@@ -29,3 +29,5 @@ void xcan_usb_poll( void );
 int xcan_usb_out_pending( uint8_t **data );
 void xcan_usb_out_release( void );
 void xcan_usb_detach( void );
+/* clears the IN-endpoint busy flags and pending OUT packet; called on USB reset/configure/detach */
+void xcan_usb_reset_state( void );

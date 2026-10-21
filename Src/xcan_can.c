@@ -28,6 +28,7 @@ static struct
   uint32_t tx_msgs;
   uint32_t tx_errs;
   uint32_t tx_ovfs;
+  uint64_t tx_progress_us; /* last time the tx fifo made progress, or became non-empty */
 
   uint32_t rx_msgs;
   uint32_t rx_errs;
@@ -230,6 +231,7 @@ static void xcan_can_flush_tx( void )
       return;
     /* cannot fail: mailbox 0 is free and only this loop fills it */
     (void)xcan_try_send_message( p_msg );
+    can_dev.tx_progress_us = xcan_timestamp_us();
     can_dev.tx_tail = (can_dev.tx_tail+1)&(CAN_TX_FIFO_SIZE-1);
   }
 }
@@ -237,6 +239,29 @@ static void xcan_can_flush_tx( void )
 int xcan_can_tx_full( void )
 {
   return ((can_dev.tx_head+1)&(CAN_TX_FIFO_SIZE-1)) == can_dev.tx_tail;
+}
+
+/* A full tx fifo normally makes the host command wait for space. On a bus nobody acknowledges (no peer, or the node
+   is isolated) the head frame is retried forever and the fifo never drains; waiting then blocks every later host
+   command (stop, flush, reset...) behind the stuck frame. After XCAN_TX_STALL_US without progress the oldest queued
+   frame is dropped, as a controller that has gone bus-off would, so the command stream keeps moving.
+   Returns 1 if there is room for one more frame. */
+#define XCAN_TX_STALL_US (50000ULL)
+
+int xcan_can_tx_make_room( void )
+{
+  if( !xcan_can_tx_full() )
+    return 1;
+  if( xcan_timestamp_us() - can_dev.tx_progress_us < XCAN_TX_STALL_US )
+    return 0;
+
+  HAL_NVIC_DisableIRQ( CEC_CAN_IRQn );
+  HAL_CAN_AbortTxRequest( &g_hcan, CAN_TX_MAILBOX0 | CAN_TX_MAILBOX1 | CAN_TX_MAILBOX2 );
+  can_dev.tx_tail = (can_dev.tx_tail+1)&(CAN_TX_FIFO_SIZE-1);
+  ++can_dev.tx_ovfs;
+  HAL_NVIC_EnableIRQ( CEC_CAN_IRQn );
+  can_dev.tx_progress_us = xcan_timestamp_us();
+  return 1;
 }
 
 int xcan_can_send_message( const can_message_t *p_msg )
@@ -252,6 +277,8 @@ int xcan_can_send_message( const can_message_t *p_msg )
     return -1;
   }
 
+  if( can_dev.tx_head == can_dev.tx_tail )
+    can_dev.tx_progress_us = xcan_timestamp_us();
   can_dev.tx_fifo[can_dev.tx_head] = *p_msg;
   can_dev.tx_head = tx_head_next;
 

@@ -81,11 +81,22 @@ __ALIGN_BEGIN static struct t_xcan_description xcan_usb_dev __ALIGN_END =
 };
 
 
+/* A USB bus reset, re-configuration or detach cancels any transfer in flight without a DataIn completion, so the
+   "IN endpoint busy" flags and the response state machine must be cleared here or no reply can ever be sent again. */
+void xcan_usb_reset_state( void )
+{
+  memset( xcan_data.ep_tx_in_use, 0, sizeof( xcan_data.ep_tx_in_use ) );
+  xcan_data.tx_flow_control_in_use = 0;
+  out_pending_size = -1;
+}
+
 static uint8_t device_init( USBD_HandleTypeDef *pdev, uint8_t cfgidx )
 {
   USB_ENDPOINT_DESCRIPTOR *p_ep = &xcan_usb_dev.ep1;
 
   UNUSED( cfgidx );
+  xcan_usb_reset_state();
+  xcan_protocol_reset();
   
   for( int i = 0; i < xcan_usb_dev.if0.bNumEndpoints; i++ )
   {
@@ -124,6 +135,8 @@ static uint8_t device_deinit( USBD_HandleTypeDef *pdev, uint8_t cfgidx )
   USB_ENDPOINT_DESCRIPTOR const *p_ep = &xcan_usb_dev.ep1;
 
   UNUSED( cfgidx );
+  xcan_usb_reset_state();
+  xcan_protocol_reset();
   
   for( int i = 0; i < xcan_usb_dev.if0.bNumEndpoints; i++ )
   {

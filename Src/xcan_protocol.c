@@ -77,6 +77,12 @@ static uint8_t temp_resp_buffer[XCAN_RESP_BUFFER_SIZE] = { 0 };
 static uint8_t reset_requested = 0;
 static uint8_t resp_buffer[sizeof(temp_resp_buffer)];
 static int resp_buffer_pos = 0;
+static int out_pos = 0;
+static uint8_t protocol_ready = 0;
+
+/* Room kept free for command replies: received frames and TX acks wait (the CAN ring holds them) instead of using it up, so a
+   busy bus can never make a reply to the host's command (for example GET_SOFTWARE_INFO during probe) impossible to queue. */
+#define XCAN_RESP_RESERVE 128
 
 static struct t_m2h_fsm resp_fsm = 
 {
@@ -107,6 +113,8 @@ static int xcan_resp_room( void )
 
 static int xcan_rx_message( can_message_t *pmsg )
 {
+  if( xcan_resp_room() < (int)sizeof( cmdRxCanMessage ) + XCAN_RESP_RESERVE )
+    return 0;
   cmdRxCanMessage *p_resp = xcan_alloc_resp( sizeof( cmdRxCanMessage ) );
   if( !p_resp )
     return 0;
@@ -154,6 +162,8 @@ static int xcan_rx_message( can_message_t *pmsg )
 /* not real tx ok cb */
 static int xcan_tx_message( can_message_t *msg )
 {
+  if( xcan_resp_room() < (int)sizeof( cmdTxAck ) + XCAN_RESP_RESERVE )
+    return 0;
   cmdTxAck *p_resp = xcan_alloc_resp( sizeof( cmdTxAck ) );
   if( !p_resp )
     return 0;
@@ -180,7 +190,7 @@ int xcan_handle_tx_message( cmdTxCanMessage *pmsg, uint8_t ext_id )
 {
   can_message_t msg = { 0 };
 
-  if( xcan_can_tx_full() )
+  if( !xcan_can_tx_make_room() )
     return -1;
 
   msg.id = pmsg->rawMessage[0] & 0x1F;
@@ -680,6 +690,20 @@ void xcan_protocol_init( void )
   xcan_can_install_rx_callback( xcan_rx_message  );
   xcan_can_install_tx_callback( xcan_tx_message  );
   xcan_can_install_error_callback( xcan_can_error );
+  protocol_ready = 1;
+}
+
+void xcan_protocol_reset( void )
+{
+  resp_buffer_pos = 0;
+  resp_fsm.state = 0;
+  out_pos = 0;
+  xcan_device.can[0].bus_active = 0;
+  if( protocol_ready )
+  {
+    xcan_can_set_bus_active( 0 );
+    xcan_can_flush_queues();
+  }
 }
 
 static void xcan_flush_resp( void )
@@ -697,7 +721,6 @@ static void xcan_flush_resp( void )
 
 void xcan_protocol_poll( void )
 {
-  static int out_pos = 0;
   uint8_t *out_data;
   int out_size;
 

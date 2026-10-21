@@ -26,6 +26,7 @@ void xcan_can_poll( void );
 void xcan_can_set_bitrate( uint16_t brp, uint8_t tseg1, uint8_t tseg2, uint8_t sjw );
 int xcan_can_send_message( const can_message_t *msg );
 int xcan_can_tx_full( void );
+int xcan_can_tx_make_room( void );
 /* rx/tx callbacks return 0 when the host-bound response queue is full; the
    frame (or tx ack) is then retried on a later poll instead of being dropped */
 void xcan_can_install_rx_callback( int (*cb)( can_message_t * ) );
