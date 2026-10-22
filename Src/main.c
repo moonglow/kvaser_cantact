@@ -95,8 +95,46 @@ void SysTick_Handler( void )
   HAL_IncTick();
 }
 
+#if defined(STM32F072xB)
+/* Reboot into the ST system bootloader (DFU) without the BOOT0 jumper: the
+   request survives the reset in .noinit RAM and is acted on before any
+   peripheral is set up. */
+#define BOOTLOADER_MAGIC        (0xB007C0DEu)
+#define SYSTEM_MEMORY_BASE      (0x1FFFC800u)
+
+static volatile uint32_t bootloader_request[2] __attribute__((section(".noinit")));
+
+static void jump_to_bootloader_if_requested( void )
+{
+  const uint32_t *vectors = (const uint32_t *)SYSTEM_MEMORY_BASE;
+
+  if( bootloader_request[0] != BOOTLOADER_MAGIC || bootloader_request[1] != ~BOOTLOADER_MAGIC )
+    return;
+  bootloader_request[0] = 0;
+  bootloader_request[1] = 0;
+
+  /* the bootloader's interrupt vectors must appear at address 0 */
+  __HAL_RCC_SYSCFG_CLK_ENABLE();
+  __HAL_SYSCFG_REMAPMEMORY_SYSTEMFLASH();
+  __set_MSP( vectors[0] );
+  ((void (*)( void ))vectors[1])();
+}
+#endif
+
+void xcan_reset_to_bootloader( void )
+{
+#if defined(STM32F072xB)
+  bootloader_request[0] = BOOTLOADER_MAGIC;
+  bootloader_request[1] = ~BOOTLOADER_MAGIC;
+#endif
+  NVIC_SystemReset();
+}
+
 int main( void )
 {
+#if defined(STM32F072xB)
+  jump_to_bootloader_if_requested();
+#endif
   HAL_Init();
 
   SystemClock_Config();

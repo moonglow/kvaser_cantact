@@ -24,7 +24,7 @@ __ALIGN_BEGIN uint8_t USBD_FS_DeviceDesc[USB_LEN_DEV_DESC] __ALIGN_END =
   0x00,
   1,                         /*Index of manufacturer  string*/
   2,                          /*Index of product string*/
-  0,                          /*Index of serial number string*/
+  3,                          /*Index of serial number string*/
   USBD_MAX_NUM_CONFIGURATION  /*bNumConfigurations*/
 };
 
@@ -56,7 +56,7 @@ uint8_t * USBD_FS_LangIDStrDescriptor(USBD_SpeedTypeDef speed, uint16_t *length)
 uint8_t* USBD_FS_ManufacturerStrDescriptor(USBD_SpeedTypeDef speed, uint16_t *length)
 {
   UNUSED(speed);
-  USBD_GetString( (uint8_t *)"Kvaser AB", USBD_StrDesc, length );
+  USBD_GetString( (uint8_t *)"Xvaser", USBD_StrDesc, length );
 
   return USBD_StrDesc;
 }
@@ -64,15 +64,28 @@ uint8_t* USBD_FS_ManufacturerStrDescriptor(USBD_SpeedTypeDef speed, uint16_t *le
 uint8_t* USBD_FS_ProductStrDescriptor(USBD_SpeedTypeDef speed, uint16_t *length)
 {
   UNUSED(speed);
-  USBD_GetString( (uint8_t *)"Kvaser Leaf Light v2", USBD_StrDesc, length );
+  USBD_GetString( (uint8_t *)"Xvaser LL v2", USBD_StrDesc, length );
 
   return USBD_StrDesc;
 }
 
+/* 96-bit STM32 unique ID as 24 hex digits, the format candleLight reports */
 uint8_t* USBD_FS_SerialStrDescriptor(USBD_SpeedTypeDef speed, uint16_t *length)
 {
+  static const char hex[] = "0123456789ABCDEF";
+  const uint32_t *uid = (const uint32_t *)UID_BASE;
+  char serial[25];
+
   UNUSED(speed);
-  USBD_GetString( (uint8_t *)"\x31\x32\x33\x34\x35\x36\x00", USBD_StrDesc, length );
+  for( int w = 0; w < 3; w++ )
+  {
+    for( int n = 0; n < 8; n++ )
+    {
+      serial[w*8 + n] = hex[(uid[w] >> (28 - 4*n)) & 0x0F];
+    }
+  }
+  serial[24] = 0;
+  USBD_GetString( (uint8_t *)serial, USBD_StrDesc, length );
 
   return USBD_StrDesc;
 }

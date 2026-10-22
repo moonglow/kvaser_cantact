@@ -15,6 +15,11 @@ else
 	TARGET = kll_$(BOARD)
 endif
 
+# MCU family; defaults to STM32F042, board targets below may override
+MCU_DEVICE ?= STM32F042x6
+STARTUP ?= startup_stm32f042x6.s
+LINKER_SCRIPT ?= STM32F042C6Tx_FLASH.ld
+
 #######################################
 # paths
 #######################################
@@ -50,7 +55,7 @@ Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_ioreq.c \
 
 # ASM sources
 ASM_SOURCES =  \
-startup_stm32f042x6.s
+$(STARTUP)
 
 
 #######################################
@@ -95,7 +100,7 @@ AS_DEFS =
 # C defines
 C_DEFS =  \
 -DUSE_HAL_DRIVER \
--DSTM32F042x6 \
+-D$(MCU_DEVICE) \
 -DNDEBUG \
 -DEXTERNAL_CLOCK=$(EXTERNAL_CLOCK) \
 -DBOARD_ID=$(BOARD_ID)
@@ -134,7 +139,7 @@ CFLAGS += -MMD -MP -MF"$(@:%.o=%.d)"
 # LDFLAGS
 #######################################
 # link script
-LDSCRIPT = STM32F042C6Tx_FLASH.ld
+LDSCRIPT = $(LINKER_SCRIPT)
 
 # libraries
 LIBS = -lc -lm -lnosys 
@@ -153,6 +158,16 @@ cantact-8:
 
 entree:
 	$(MAKE) BOARD=entree BOARD_ID=1 EXTERNAL_CLOCK=0 DEBUG=0 OPT=-Os elf hex bin
+
+# FYSETC UCAN (STM32F072CBT6, 8 MHz crystal X1)
+UCAN_MCU = MCU_DEVICE=STM32F072xB STARTUP=startup_stm32f072xb.s LINKER_SCRIPT=STM32F072CBTx_FLASH.ld
+
+ucan:
+	$(MAKE) BOARD=ucan BOARD_ID=2 EXTERNAL_CLOCK=1 CRYSTAL_FREQ_MHZ=8 $(UCAN_MCU) DEBUG=0 OPT=-Os elf hex bin
+
+# UCAN fallback that ignores the crystal and runs from HSI48 trimmed by USB SOF
+ucan-hsi48:
+	$(MAKE) BOARD=ucan-hsi48 BOARD_ID=2 EXTERNAL_CLOCK=0 $(UCAN_MCU) DEBUG=0 OPT=-Os elf hex bin
 
 #######################################
 # build the application

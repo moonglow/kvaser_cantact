@@ -9,6 +9,8 @@
 #include "xcan_usb.h"
 
 static struct t_class_data xcan_data = { 0 };
+/* size of the received OUT packet not yet processed, -1 when none */
+static int out_pending_size = -1;
 USBD_HandleTypeDef hUsbDeviceFS;
 extern USBD_DescriptorsTypeDef FS_Desc;
 
@@ -79,11 +81,22 @@ __ALIGN_BEGIN static struct t_xcan_description xcan_usb_dev __ALIGN_END =
 };
 
 
+/* A USB bus reset, re-configuration or detach cancels any transfer in flight without a DataIn completion, so the
+   "IN endpoint busy" flags and the response state machine must be cleared here or no reply can ever be sent again. */
+void xcan_usb_reset_state( void )
+{
+  memset( xcan_data.ep_tx_in_use, 0, sizeof( xcan_data.ep_tx_in_use ) );
+  xcan_data.tx_flow_control_in_use = 0;
+  out_pending_size = -1;
+}
+
 static uint8_t device_init( USBD_HandleTypeDef *pdev, uint8_t cfgidx )
 {
   USB_ENDPOINT_DESCRIPTOR *p_ep = &xcan_usb_dev.ep1;
 
   UNUSED( cfgidx );
+  xcan_usb_reset_state();
+  xcan_protocol_reset();
   
   for( int i = 0; i < xcan_usb_dev.if0.bNumEndpoints; i++ )
   {
@@ -110,6 +123,7 @@ static uint8_t device_init( USBD_HandleTypeDef *pdev, uint8_t cfgidx )
   }
     
   pdev->pClassData = (void*)&xcan_data;
+  out_pending_size = -1;
 
   USBD_LL_PrepareReceive( pdev, XCAN_USB_EP_MSGOUT, xcan_data.data1_ep_buffer, sizeof( xcan_data.data1_ep_buffer ) );
   
@@ -121,6 +135,8 @@ static uint8_t device_deinit( USBD_HandleTypeDef *pdev, uint8_t cfgidx )
   USB_ENDPOINT_DESCRIPTOR const *p_ep = &xcan_usb_dev.ep1;
 
   UNUSED( cfgidx );
+  xcan_usb_reset_state();
+  xcan_protocol_reset();
   
   for( int i = 0; i < xcan_usb_dev.if0.bNumEndpoints; i++ )
   {
@@ -133,6 +149,7 @@ static uint8_t device_deinit( USBD_HandleTypeDef *pdev, uint8_t cfgidx )
   }
   
   pdev->pClassData = (void*)0;
+  out_pending_size = -1;
   return USBD_OK;
 }
 
@@ -202,8 +219,8 @@ static uint8_t device_data_out( USBD_HandleTypeDef *pdev, uint8_t epnum )
   
   if( epnum == XCAN_USB_EP_MSGOUT )
   {
-    xcan_protocol_process_data( xcan_data.data1_ep_buffer, size );
-    USBD_LL_PrepareReceive( pdev, XCAN_USB_EP_MSGOUT, xcan_data.data1_ep_buffer, sizeof( xcan_data.data1_ep_buffer ) );
+    /* processed from the main loop; not re-arming NAKs the host meanwhile */
+    out_pending_size = size;
   }
   else
   {
@@ -275,6 +292,28 @@ void xcan_usb_init( void )
   {
     assert( 0 );
   }
+}
+
+int xcan_usb_out_pending( uint8_t **data )
+{
+  *data = xcan_data.data1_ep_buffer;
+  return out_pending_size;
+}
+
+void xcan_usb_out_release( void )
+{
+  if( out_pending_size < 0 || hUsbDeviceFS.pClassData == 0 )
+    return;
+  out_pending_size = -1;
+  USBD_LL_PrepareReceive( &hUsbDeviceFS, XCAN_USB_EP_MSGOUT, xcan_data.data1_ep_buffer, sizeof( xcan_data.data1_ep_buffer ) );
+}
+
+void xcan_usb_detach( void )
+{
+  /* drop the D+ pull-up long enough for the host to see a disconnect;
+     a bare MCU reset is too quick and the host keeps the stale device */
+  USBD_Stop( &hUsbDeviceFS );
+  HAL_Delay( 100 );
 }
 
 int xcan_flush_ep( uint8_t ep )

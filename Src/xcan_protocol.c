@@ -1,13 +1,24 @@
 #include <assert.h>
 #include <stdint.h>
 #include <string.h>
+#include "stm32f0xx.h"
 #include "xcan_can.h"
 #include "xcan_usb.h"
+#include "xcan_protocol.h"
 #include "xcan_led.h"
 #include "xcan_timestamp.h"
 #include "filo_cmds.h"
 
 #define XCAN_CHANNEL_MAX (1)
+
+/* Per-device card serial: fold the 96-bit STM32F0 unique ID to a 6-digit
+   decimal (100000..999999), as in the Filo301/kvaser_cantact fork. */
+static uint32_t xcan_serial_number( void )
+{
+  const uint32_t *uid = (const uint32_t *)UID_BASE;
+  uint32_t s = uid[0] ^ uid[1] ^ uid[2];
+  return (s % 900000u) + 100000u;
+}
 
 static struct
 {
@@ -56,9 +67,22 @@ xcan_device =
   },
 };
 
-static uint8_t temp_resp_buffer[732] = { 0 };
+/* one USB IN transfer; must stay below the kvaser_usb leaf RX URB size (3072) */
+#if defined(STM32F072xB)
+#define XCAN_RESP_BUFFER_SIZE (1536)
+#else
+#define XCAN_RESP_BUFFER_SIZE (640) /* F042: 6K RAM */
+#endif
+static uint8_t temp_resp_buffer[XCAN_RESP_BUFFER_SIZE] = { 0 };
+static uint8_t reset_requested = 0;
 static uint8_t resp_buffer[sizeof(temp_resp_buffer)];
 static int resp_buffer_pos = 0;
+static int out_pos = 0;
+static uint8_t protocol_ready = 0;
+
+/* Room kept free for command replies: received frames and TX acks wait (the CAN ring holds them) instead of using it up, so a
+   busy bus can never make a reply to the host's command (for example GET_SOFTWARE_INFO during probe) impossible to queue. */
+#define XCAN_RESP_RESERVE 128
 
 static struct t_m2h_fsm resp_fsm = 
 {
@@ -81,12 +105,20 @@ void *xcan_alloc_resp( int size )
   return p;
 }
 
-static void xcan_rx_message( can_message_t *pmsg )
+/* room left in the host-bound response buffer, keeping the terminating zero */
+static int xcan_resp_room( void )
 {
+  return (int)sizeof( resp_buffer ) - 1 - resp_buffer_pos;
+}
+
+static int xcan_rx_message( can_message_t *pmsg )
+{
+  if( xcan_resp_room() < (int)sizeof( cmdRxCanMessage ) + XCAN_RESP_RESERVE )
+    return 0;
   cmdRxCanMessage *p_resp = xcan_alloc_resp( sizeof( cmdRxCanMessage ) );
   if( !p_resp )
-    return;
-  
+    return 0;
+
   /* valid CAN message, clear error flags ? */
   xcan_device.can[0].err = 0;
 
@@ -94,10 +126,14 @@ static void xcan_rx_message( can_message_t *pmsg )
   p_resp->cmdNo = ( pmsg->flags & CAN_FLAG_EXTID )? CMD_RX_EXT_MESSAGE:CMD_RX_STD_MESSAGE;
   p_resp->channel = 0;
   p_resp->flags = 0;
-  
+
   if( pmsg->flags & CAN_FLAG_RTR )
   {
     p_resp->flags |= MSGFLAG_REMOTE_FRAME;
+  }
+  if( pmsg->flags & CAN_FLAG_OVERRUN )
+  {
+    p_resp->flags |= MSGFLAG_OVERRUN;
   }
 
   xcan_timestamp_ticks_from_ts( p_resp->time, pmsg->timestamp );
@@ -120,14 +156,17 @@ static void xcan_rx_message( can_message_t *pmsg )
   memcpy( &p_resp->rawMessage[6], pmsg->data, 8 );
 
   xcan_led_set_mode( LED1, LED_MODE_BLINK_FAST, 237 );
+  return 1;
 }
 
 /* not real tx ok cb */
-static void xcan_tx_message( can_message_t *msg )
+static int xcan_tx_message( can_message_t *msg )
 {
+  if( xcan_resp_room() < (int)sizeof( cmdTxAck ) + XCAN_RESP_RESERVE )
+    return 0;
   cmdTxAck *p_resp = xcan_alloc_resp( sizeof( cmdTxAck ) );
   if( !p_resp )
-    return;
+    return 0;
 
   p_resp->cmdLen = sizeof( cmdTxAck );
   p_resp->cmdNo = CMD_TX_ACKNOWLEDGE;
@@ -136,6 +175,7 @@ static void xcan_tx_message( can_message_t *msg )
 
   xcan_timestamp_ticks_from_ts( p_resp->time, msg->timestamp );
   xcan_led_set_mode( LED0, LED_MODE_BLINK_FAST, 237 );
+  return 1;
 }
 
 static void xcan_can_error( uint8_t err, uint8_t rx_err, uint8_t tx_err )
@@ -145,10 +185,13 @@ static void xcan_can_error( uint8_t err, uint8_t rx_err, uint8_t tx_err )
   xcan_device.can[0].err = err;
 }
 
-#define WAIT_FOR_TXSLOTS 1
+/* returns -1 when the tx queue is full; the caller retries the command later */
 int xcan_handle_tx_message( cmdTxCanMessage *pmsg, uint8_t ext_id )
 {
   can_message_t msg = { 0 };
+
+  if( !xcan_can_tx_make_room() )
+    return -1;
 
   msg.id = pmsg->rawMessage[0] & 0x1F;
   msg.id <<= 6;
@@ -177,31 +220,14 @@ int xcan_handle_tx_message( cmdTxCanMessage *pmsg, uint8_t ext_id )
   msg.dummy = pmsg->transId;
   msg.timestamp = xcan_timestamp_us();
 
-#if WAIT_FOR_TXSLOTS
-  const uint32_t ts_poll = xcan_timestamp32_us();
-  while( xcan_can_send_message( &msg ) < 0 )
-  {
-    xcan_can_poll();
-    if( xcan_device.can[0].err & CAN_ERROR_FLAG_BUSOFF )
-      return -1;
-    uint32_t ts_diff = xcan_timestamp32_us() - ts_poll;
-    if( ts_diff >= 1000000u )
-      return -1;
-  }
-#else
-  if( xcan_can_send_message( &msg ) < 0 )
-  {
-    /* tx queue overflow ? */
-    return -1;
-  }
-#endif
-  return 0;
+  return xcan_can_send_message( &msg );
 }
 
-void xcan_handle_command( filoCmd *pcmd, int size )
+/* returns 0 if the command could not be handled yet and must be retried */
+int xcan_handle_command( filoCmd *pcmd, int size )
 {
   if( size < 2 )
-    return;
+    return 1;
 
   switch( pcmd->head.cmdNo )
   {
@@ -234,7 +260,7 @@ void xcan_handle_command( filoCmd *pcmd, int size )
 
        p_resp->transId = pcmd->getCardInfoReq.transId;
        p_resp->channelCount = 1;
-       p_resp->serialNumber = 666u;
+       p_resp->serialNumber = xcan_serial_number();
        p_resp->padding1 = 0;
        p_resp->clockResolution = 0;
        p_resp->mfgDate = 1523452686u; /* unix time */
@@ -408,8 +434,10 @@ void xcan_handle_command( filoCmd *pcmd, int size )
     /* TODO: */
     case CMD_RESET_CHIP_REQ:
     break;
-    /* TODO: */
+    /* reboot into the ST DFU bootloader (F072; a plain reboot on the F042),
+       so it can be reflashed without touching the board (tools/reset_card.py) */
     case CMD_RESET_CARD_REQ:
+      reset_requested = 1;
     break;
     case CMD_START_CHIP_REQ:
     {
@@ -456,16 +484,19 @@ void xcan_handle_command( filoCmd *pcmd, int size )
     /* no answer needed */
     case CMD_SET_BUSPARAMS_REQ:
     {
-      uint16_t brp;
+      uint32_t brp, bit_clk;
 
       assert( pcmd->setBusparamsReq.channel < XCAN_CHANNEL_MAX );
 
-      brp = 16000000u/(pcmd->setBusparamsReq.bitRate*(1 + pcmd->setBusparamsReq.tseg1 + pcmd->setBusparamsReq.tseg2));
-      if( brp <= 1 || brp > 256 )
+      /* CAN peripheral runs from the 48MHz APB clock; reject timings that
+         do not divide it exactly instead of truncating to a wrong bitrate */
+      bit_clk = pcmd->setBusparamsReq.bitRate*(1 + pcmd->setBusparamsReq.tseg1 + pcmd->setBusparamsReq.tseg2);
+      if( !bit_clk )
         break;
-      /* adjust for 48MHz */
-      brp *= 3;
-      
+      brp = 48000000u/bit_clk;
+      if( brp < 1 || brp > 1024 || brp*bit_clk != 48000000u )
+        break;
+
       xcan_can_set_bitrate( brp, pcmd->setBusparamsReq.tseg1, pcmd->setBusparamsReq.tseg2, pcmd->setBusparamsReq.sjw );
 
       /* save for future use */
@@ -606,6 +637,7 @@ void xcan_handle_command( filoCmd *pcmd, int size )
     /* TODO: check capabilities */
     case CMD_FLUSH_QUEUE:
     {
+      xcan_can_flush_queues();
       cmdFlushQueueResp *p_resp = xcan_alloc_resp( sizeof( cmdFlushQueueResp ) );
       if( !p_resp )
         break;
@@ -618,35 +650,38 @@ void xcan_handle_command( filoCmd *pcmd, int size )
     break;
     case CMD_TX_STD_MESSAGE:
     case CMD_TX_EXT_MESSAGE:
-      (void)xcan_handle_tx_message( &pcmd->txCanMessage, pcmd->head.cmdNo == CMD_TX_EXT_MESSAGE );
+      if( xcan_handle_tx_message( &pcmd->txCanMessage, pcmd->head.cmdNo == CMD_TX_EXT_MESSAGE ) < 0 )
+        return 0;
     break;
     default:
       assert( 0 );
     break;
   }
+  return 1;
 }
 
-void xcan_protocol_process_data( uint8_t *ptr, uint16_t size )
+/* largest set of responses one command produces (card info + throttle) */
+#define XCAN_CMD_RESP_RESERVE (128)
+
+/* Handles commands from one USB OUT packet, starting at *pos. Stops early when
+   a command cannot be handled yet (tx queue full or no response room) so the
+   caller can retry; returns 1 once the whole packet is consumed. */
+static int xcan_protocol_process_data( uint8_t *ptr, int size, int *pos )
 {
   filoCmd *pcmd = 0;
 
-  for( int i = 0; i < size; )
+  while( *pos < size )
   {
-    if( !ptr[i] )
+    if( !ptr[*pos] )
       break;
-    pcmd = (void*)&ptr[i];
-#if 0
-    /* next cmd aligned to 64 byte bound, we can just wait for next data chunk */
-    if( pcmd->head.cmdLen == 0 )
-    {
-      //i = (i+63)&(~63);
-      //continue;
-      break;
-    }
-#endif
-    xcan_handle_command( pcmd, size - i );
-    i += pcmd->head.cmdLen;
+    if( xcan_resp_room() < XCAN_CMD_RESP_RESERVE )
+      return 0;
+    pcmd = (void*)&ptr[*pos];
+    if( !xcan_handle_command( pcmd, size - *pos ) )
+      return 0;
+    *pos += pcmd->head.cmdLen;
   }
+  return 1;
 }
 
 void xcan_protocol_init( void )
@@ -655,21 +690,56 @@ void xcan_protocol_init( void )
   xcan_can_install_rx_callback( xcan_rx_message  );
   xcan_can_install_tx_callback( xcan_tx_message  );
   xcan_can_install_error_callback( xcan_can_error );
+  protocol_ready = 1;
 }
 
-void xcan_protocol_poll( void )
+void xcan_protocol_reset( void )
+{
+  resp_buffer_pos = 0;
+  resp_fsm.state = 0;
+  out_pos = 0;
+  xcan_device.can[0].bus_active = 0;
+  if( protocol_ready )
+  {
+    xcan_can_set_bus_active( 0 );
+    xcan_can_flush_queues();
+  }
+}
+
+static void xcan_flush_resp( void )
 {
   if( resp_buffer_pos > 1 )
   {
     /* add zero cmd len as finish flag */
     resp_buffer[resp_buffer_pos] = 0;
-    int res = xcan_flush_data( &resp_fsm, resp_buffer, resp_buffer_pos + 1 );
-    //int res = xcan_flush_data( &resp_fsm, resp_buffer, resp_buffer_pos );
-    if( res )
+    if( xcan_flush_data( &resp_fsm, resp_buffer, resp_buffer_pos + 1 ) )
     {
       resp_buffer_pos = 0;
     }
   }
+}
+
+void xcan_protocol_poll( void )
+{
+  uint8_t *out_data;
+  int out_size;
+
+  xcan_flush_resp();
+
+  /* host commands; the OUT endpoint stays NAKed until the packet is consumed */
+  out_size = xcan_usb_out_pending( &out_data );
+  if( out_size >= 0 && xcan_protocol_process_data( out_data, out_size, &out_pos ) )
+  {
+    out_pos = 0;
+    if( reset_requested )
+    {
+      /* does not return; the endpoint is deliberately left un-armed */
+      xcan_usb_detach();
+      xcan_reset_to_bootloader();
+    }
+    xcan_usb_out_release();
+  }
 
   xcan_can_poll();
+  xcan_flush_resp();
 }
